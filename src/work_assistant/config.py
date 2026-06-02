@@ -10,7 +10,7 @@ import tomllib
 from typing import Any
 
 import keyring
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from work_assistant import paths
 
@@ -21,31 +21,35 @@ class ConfigError(Exception):
     """Raised when configuration cannot be loaded or validated."""
 
 
-class BedrockModels(BaseModel):
+class _StrictBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class BedrockModels(_StrictBase):
     sonnet: str
     opus: str
     haiku: str
 
 
-class BedrockConfig(BaseModel):
+class BedrockConfig(_StrictBase):
     region: str
     aws_profile: str
     models: BedrockModels
 
 
-class McpConfig(BaseModel):
+class McpConfig(_StrictBase):
     todoist_command: list[str]
     slack_command: list[str]
     workspace_command: list[str]
 
 
-class IngestConfig(BaseModel):
+class IngestConfig(_StrictBase):
     backfill_days_slack: int
     backfill_days_gmail: int
     backfill_days_calendar: int
 
 
-class Config(BaseModel):
+class Config(_StrictBase):
     bedrock: BedrockConfig
     mcp: McpConfig
     ingest: IngestConfig
