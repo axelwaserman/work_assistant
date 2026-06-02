@@ -1,0 +1,24 @@
+# Copy to ~/.work_assistant/config.toml and fill in your values.
+# Secrets (tokens, refresh tokens) are NOT stored here; they live in the OS keyring.
+# Use `wa secrets set <name>` to populate them.
+
+[bedrock]
+region      = "eu-west-1"
+aws_profile = "work-assistant"
+
+[bedrock.models]
+# Use Bedrock model IDs or inference profile ARNs (NOT Anthropic slugs).
+sonnet = "arn:aws:bedrock:eu-west-1:000000000000:inference-profile/eu.anthropic.claude-sonnet-4-6-v1:0"
+opus   = "arn:aws:bedrock:eu-west-1:000000000000:inference-profile/eu.anthropic.claude-opus-4-7-v1:0"
+haiku  = "eu.anthropic.claude-haiku-4-5-v1:0"
+
+[mcp]
+# Each command is the argv list to spawn the MCP server (stdio).
+todoist_command   = ["npx", "-y", "@doist/todoist-mcp"]
+slack_command     = ["npx", "-y", "@modelcontextprotocol/server-slack"]
+workspace_command = ["uvx", "google-workspace-mcp"]
+
+[ingest]
+backfill_days_slack    = 30
+backfill_days_gmail    = 90
+backfill_days_calendar = 60
