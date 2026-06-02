@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments / IDE
+.env
+.envrc
+.idea/
+.vscode/
+
+# Build artefacts
+build/
+dist/
+
+# Project-specific
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+logs/
