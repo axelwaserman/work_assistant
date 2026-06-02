@@ -56,6 +56,13 @@ def test_load_missing_required_field_raises_clear_error(isolated_home: Path) -> 
         config.load()
 
 
+def test_load_rejects_unknown_field(isolated_home: Path) -> None:
+    bad_config = CONFIG_FIXTURE + "\n[unknown_section]\nfoo = \"bar\"\n"
+    (isolated_home / ".work_assistant" / "config.toml").write_text(bad_config)
+    with pytest.raises(config.ConfigError, match="validation failed"):
+        config.load()
+
+
 def test_secret_get_uses_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
