@@ -40,6 +40,8 @@ _RESERVED = {
     "message",
     "asctime",
     "taskName",
+    # Framework-injected attributes that must not leak into JSON output
+    "color_message",
 }
 
 
@@ -49,24 +51,21 @@ class _JsonFormatter(logging.Formatter):
         self._proc = proc
 
     def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "msg": record.getMessage(),
-            "proc": self._proc,
-        }
+        payload: dict[str, Any] = {}
+        # Pass 1: caller-supplied extras (canonical fields will overwrite any collisions)
         for key, value in record.__dict__.items():
             if key in _RESERVED or key.startswith("_"):
                 continue
-            try:
-                json.dumps(value)
-            except (TypeError, ValueError):
-                value = repr(value)
             payload[key] = value
+        # Pass 2: canonical fields always win
+        payload["ts"] = datetime.fromtimestamp(record.created, UTC).isoformat()
+        payload["level"] = record.levelname
+        payload["logger"] = record.name
+        payload["msg"] = record.getMessage()
+        payload["proc"] = self._proc
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps(payload, ensure_ascii=False, default=repr)
 
 
 _CONFIGURED: dict[str, bool] = {"done": False}
