@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 from pathlib import Path
 
 from work_assistant.db import connection
@@ -30,7 +31,7 @@ def _list_migrations(directory: Path) -> list[Path]:
     return files
 
 
-def _ensure_meta_table(conn) -> None:  # type: ignore[no-untyped-def]
+def _ensure_meta_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
         " version TEXT PRIMARY KEY,"
@@ -53,6 +54,12 @@ def apply(directory: Path) -> list[str]:
             if version in existing:
                 continue
             sql = path.read_text()
+            # Belt-and-braces: _list_migrations already enforces this, but pin the safety
+            # invariant locally — the f-string interpolation below relies on _NAME_RE.
+            if not _NAME_RE.match(path.name):
+                raise MigrationError(
+                    f"migration filename {path.name!r} must start with 4 digits and a slug"
+                )
             # `executescript` issues an implicit COMMIT before running, so wrap
             # the migration body and the metadata insert inside a single
             # BEGIN/COMMIT block within the script itself for atomicity.
