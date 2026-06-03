@@ -81,3 +81,35 @@ def test_apply_records_only_successful_migrations(
         }
     assert applied == ["0001_ok"]
     assert "good" in tables
+
+
+def test_phase0_migration_creates_expected_tables(isolated_home: Path) -> None:
+    paths.ensure_dirs()
+    repo_root = Path(__file__).resolve().parents[1]
+    mig_dir = repo_root / "src" / "work_assistant" / "db" / "migrations_sql"
+    migrations.apply(mig_dir)
+    with connection.connect() as conn:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall()
+    names = {r["name"] for r in rows}
+    assert {"events", "ingest_cursors", "worker_locks", "schema_migrations"} <= names
+    # FTS5 virtual tables show up as 'events_fts' plus internal shadow tables.
+    assert any(n.startswith("events_fts") for n in names)
+
+
+def test_phase0_fts_trigger_round_trip(isolated_home: Path) -> None:
+    paths.ensure_dirs()
+    repo_root = Path(__file__).resolve().parents[1]
+    mig_dir = repo_root / "src" / "work_assistant" / "db" / "migrations_sql"
+    migrations.apply(mig_dir)
+    with connection.connect() as conn:
+        conn.execute(
+            "INSERT INTO events(source, source_id, content_hash, occurred_at,"
+            " ingested_at, kind, title, body)"
+            " VALUES('slack','x','h',1,1,'message','hello','world body')"
+        )
+        rows = conn.execute(
+            "SELECT title FROM events_fts WHERE events_fts MATCH 'world'"
+        ).fetchall()
+    assert [r["title"] for r in rows] == ["hello"]
