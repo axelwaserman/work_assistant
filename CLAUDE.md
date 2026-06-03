@@ -22,7 +22,8 @@ If a Python design or implementation turn starts without `dignified-python` acti
 ## Conventions specific to this repo
 
 - **All interfaces are ABC. Never `Protocol`.** Applies to internal interfaces (sources, advisors, stores) AND external library facades (HTTP clients, MCP transport, clocks). See `dignified-python` skill — `references/advanced/interfaces.md` — for ABC patterns. Read it whenever creating an interface.
-- **No `Any`.** Every value has a concrete type. For unknown / heterogeneous payloads (e.g. MCP tool responses, JSON blobs), define a struct-like wrapper: `pydantic.BaseModel`, frozen `@dataclass`, or `TypedDict` with explicit fields. If shape varies by tool, use a tagged union (`Literal` discriminator + `pydantic` discriminated union). Raw `dict` / `list` only at the parse boundary, immediately validated into a struct.
+- **No `Any` in our own signatures, models, or return types.** Every value we define has a concrete type. For unknown / heterogeneous payloads (e.g. JSON blobs we parse), define a struct-like wrapper: `pydantic.BaseModel`, frozen `@dataclass`, or `TypedDict` with explicit fields. If shape varies by tool, use a tagged union (`Literal` discriminator + `pydantic` discriminated union). Raw `dict` / `list` only at the parse boundary, immediately validated into a struct.
+- **Carve-out for third-party types.** Types we cannot control may leak `Any` (e.g. `structlog.BoundLogger`, MCP SDK `CallToolResult`). Don't fight them. Wrap them at the seam: define our own ABC adapter (e.g. `MCPClient`) that returns one of *our* typed structs, and parse the third-party reply into that struct inside the adapter.
 - Module-level imports only. Absolute imports. No re-exports.
 - Pathlib only. Always `encoding="utf-8"` on `read_text` / `write_text`.
 - Tests under `tests/`, fixture data under `tests/fixtures/<source>/`.
