@@ -89,3 +89,16 @@ async def test_health_check_returns_status(isolated_home: Path, mock_server_path
         ok, detail = await br.health_check()
         assert ok is True
         assert "ping" in detail
+
+
+@pytest.mark.asyncio
+async def test_failed_init_propagates_on_tool_call(isolated_home: Path) -> None:
+    paths.ensure_dirs()
+    # Subprocess that exits immediately — not a real MCP server, so init fails.
+    async with bridge.MCPBridge(
+        name="mock-bad",
+        command=[sys.executable, "-c", "import sys; sys.exit(1)"],
+    ) as br:
+        with pytest.raises(RuntimeError, match="mock-bad") as excinfo:
+            await br.list_tools()
+        assert excinfo.value.__cause__ is not None
