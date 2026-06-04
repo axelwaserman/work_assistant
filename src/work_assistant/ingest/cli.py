@@ -13,6 +13,7 @@ Exit codes (spec §6.2):
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 import uuid
@@ -42,7 +43,10 @@ def _parse_source_list(value: str | None) -> list[str] | None:
 def _parse_since(value: str | None) -> int | None:
     if value is None:
         return None
-    dt = datetime.fromisoformat(value)
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise click.BadParameter(f"--since must be ISO-8601: {exc}") from exc
     if dt.tzinfo is None:
         raise click.BadParameter("--since must be timezone-aware ISO-8601")
     return int(dt.timestamp())
@@ -82,7 +86,7 @@ def ingest(
     since_str: str | None,
 ) -> None:
     """Run a single ingest pass (one process, all enabled sources)."""
-    logging_setup.setup("wa-ingest")
+    logging_setup.setup("wa-ingest", level=logging.DEBUG if verbose else logging.INFO)
     requested = _parse_source_list(source_str)
     try:
         since_unix = _parse_since(since_str)
