@@ -121,3 +121,33 @@ def test_ingest_cli_dry_run_flag_propagates(
     result = runner.invoke(ingest_cli.ingest, ["--dry-run"])
     assert result.exit_code == 0
     assert captured["opts"].dry_run is True
+
+
+def test_ingest_cli_malformed_since_exits_two(initialized_db: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(ingest_cli.ingest, ["--since", "not-a-date"])
+    assert result.exit_code == 2, result.output
+    assert "ISO-8601" in result.output
+
+
+def test_ingest_cli_verbose_sets_debug_level(
+    initialized_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, int] = {}
+
+    real_setup = logging_setup.setup
+
+    def spy_setup(proc: str, level: int = logging.INFO) -> None:
+        captured["level"] = level
+        real_setup(proc, level=level)
+
+    monkeypatch.setattr(logging_setup, "setup", spy_setup)
+
+    async def fake_run_worker(opts):  # type: ignore[no-untyped-def]
+        return 0
+
+    monkeypatch.setattr(ingest_cli, "run_worker", fake_run_worker)
+    runner = CliRunner()
+    result = runner.invoke(ingest_cli.ingest, ["--verbose"])
+    assert result.exit_code == 0
+    assert captured["level"] == logging.DEBUG
