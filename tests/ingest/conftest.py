@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,14 +24,16 @@ def initialized_db(isolated_home: Path) -> Path:
 
 
 @pytest.fixture()
-def db_conn_factory(initialized_db: Path):
+def db_conn_factory(initialized_db: Path) -> Callable[[], sqlite3.Connection]:
     """Yields a callable that opens a fresh sqlite3 connection per call."""
+
     def _factory() -> sqlite3.Connection:
         conn = sqlite3.connect(initialized_db, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
+
     return _factory
 
 
