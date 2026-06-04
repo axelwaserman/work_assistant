@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TypeVar
 
 from work_assistant.ingest.clock import Clock
+from work_assistant.ingest.models import Batch, Cursor, NormalizedEvent, SlackMetadata
+from work_assistant.ingest.source import Source
 from work_assistant.mcp.client import MCPClient, MCPRequest, MCPResponse
 
 
@@ -79,3 +82,92 @@ class FakeMCPClient(MCPClient):
                 f"{actual}, expected {response_model.__name__}"
             )
         return scripted.response
+
+
+class StubSource(Source):
+    """A `Source` whose `fetch()` yields a pre-scripted list of batches.
+
+    Use `StubSource.make(batches=...)` to build a class on the fly with the
+    required `name`/`mcp_server` set, then construct it with an `IngestContext`.
+    Set `raise_after` to inject an exception after N batches have been yielded.
+    """
+
+    _scripted_batches: list[Batch] = []
+    _raise_after: int | None = None
+    _raise_exc: BaseException | None = None
+
+    name = "stub"
+    mcp_server = "stub"
+
+    @classmethod
+    def make(
+        cls,
+        *,
+        name: str = "stub",
+        mcp_server: str = "stub",
+        batches: list[Batch] | None = None,
+        raise_after: int | None = None,
+        raise_exc: BaseException | None = None,
+    ) -> type[Source]:
+        attrs: dict[str, object] = {
+            "name": name,
+            "mcp_server": mcp_server,
+            "_scripted_batches": list(batches or []),
+            "_raise_after": raise_after,
+            "_raise_exc": raise_exc,
+        }
+        return type(f"StubSource_{name}", (cls,), attrs)
+
+    async def fetch(self, cursor: Cursor | None) -> AsyncIterator[Batch]:
+        for index, batch in enumerate(self._scripted_batches):
+            yield batch
+            emitted = index + 1
+            if (
+                self._raise_after is not None
+                and emitted >= self._raise_after
+                and self._raise_exc is not None
+            ):
+                raise self._raise_exc
+
+    def normalize_body(self, raw: str) -> tuple[str, bool]:
+        return raw, False
+
+    async def resolve_actor(self, raw_actor: str) -> str | None:
+        return raw_actor
+
+    def cursor_from_timestamp(self, ts: int) -> Cursor:
+        return Cursor()
+
+
+def make_event(
+    *,
+    source: str = "slack",
+    source_id: str = "m1",
+    body: str = "hello",
+    occurred_at: int = 1_700_000_000,
+) -> NormalizedEvent:
+    """Helper: builds a NormalizedEvent with a Slack metadata variant."""
+    md = SlackMetadata(
+        channel_id="C1",
+        channel_name="general",
+        is_im=False,
+        is_mpim=False,
+        is_dm=False,
+        is_mention=False,
+        reactions_json="[]",
+        files_json="[]",
+    )
+    return NormalizedEvent(
+        source=source,  # type: ignore[arg-type]
+        source_id=source_id,
+        source_link=None,
+        content_hash="0" * 64,
+        occurred_at=occurred_at,
+        actor=None,
+        thread_key=None,
+        kind="message",
+        title=None,
+        body=body,
+        body_truncated=False,
+        metadata=md,
+    )
