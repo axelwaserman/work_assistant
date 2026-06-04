@@ -47,6 +47,7 @@ class IngestConfig(_StrictBase):
     backfill_days_slack: int
     backfill_days_gmail: int
     backfill_days_calendar: int
+    sources_enabled: list[str] = []
 
 
 class Config(_StrictBase):

@@ -80,3 +80,56 @@ def test_secret_get_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config.keyring, "get_password", lambda *a, **kw: None)
     with pytest.raises(config.ConfigError, match="missing secret"):
         config.get_secret("nonexistent-key")
+
+
+def test_load_supports_sources_enabled(isolated_home: Path) -> None:
+    payload = """
+[bedrock]
+region = "eu-west-1"
+aws_profile = "wa"
+
+[bedrock.models]
+sonnet = "x"
+opus   = "y"
+haiku  = "z"
+
+[mcp]
+todoist_command   = ["true"]
+slack_command     = ["true"]
+workspace_command = ["true"]
+
+[ingest]
+backfill_days_slack    = 1
+backfill_days_gmail    = 1
+backfill_days_calendar = 1
+sources_enabled = ["slack", "todoist"]
+"""
+    (isolated_home / ".work_assistant" / "config.toml").write_text(payload, encoding="utf-8")
+    cfg = config.load()
+    assert cfg.ingest.sources_enabled == ["slack", "todoist"]
+
+
+def test_load_defaults_sources_enabled_to_empty(isolated_home: Path) -> None:
+    payload = """
+[bedrock]
+region = "eu-west-1"
+aws_profile = "wa"
+
+[bedrock.models]
+sonnet = "x"
+opus   = "y"
+haiku  = "z"
+
+[mcp]
+todoist_command   = ["true"]
+slack_command     = ["true"]
+workspace_command = ["true"]
+
+[ingest]
+backfill_days_slack    = 1
+backfill_days_gmail    = 1
+backfill_days_calendar = 1
+"""
+    (isolated_home / ".work_assistant" / "config.toml").write_text(payload, encoding="utf-8")
+    cfg = config.load()
+    assert cfg.ingest.sources_enabled == []
