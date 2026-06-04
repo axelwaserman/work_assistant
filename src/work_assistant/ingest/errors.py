@@ -39,3 +39,7 @@ def classify(exc: BaseException) -> ErrorBucket:
     if isinstance(exc, PermanentIngestError):
         return "permanent"
     return "transient"
+
+
+class LockHeldError(IngestError):
+    """`worker_locks` row held by a still-alive predecessor; we exit clean (code 3)."""
