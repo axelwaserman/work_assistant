@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
@@ -175,7 +175,7 @@ async def run_worker(opts: WorkerOptions) -> int:
         return conn
 
     try:
-        with _new_lock_conn() as lock_conn:
+        with closing(_new_lock_conn()) as lock_conn:
             try:
                 acquire_lock(lock_conn, pid=opts.pid, clock=opts.clock)
             except LockHeldError:
@@ -208,7 +208,7 @@ async def run_worker(opts: WorkerOptions) -> int:
         base_logger.warning("keyboard_interrupt")
         return EXIT_KEYBOARD_INTERRUPT
     finally:
-        with _new_lock_conn() as lock_conn:
+        with closing(_new_lock_conn()) as lock_conn:
             release_lock(lock_conn, pid=opts.pid)
 
     return compute_exit_code(results, lock_held=False, config_fatal=False)
