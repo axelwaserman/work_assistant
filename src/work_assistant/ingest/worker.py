@@ -139,6 +139,7 @@ def _build_sources(
     clock: Clock,
     run_id: str,
     settings: wa_config.Config,
+    since_unix: int | None,
 ) -> list[Source]:
     """Build one `Source` instance per selected entry, sharing one `MCPClient`
     per `mcp_server` group."""
@@ -155,6 +156,7 @@ def _build_sources(
             logger=logger,
             settings=settings,
             clock=clock,
+            since_unix=since_unix,
         )
         instances.append(cls(ctx))
     return instances
@@ -215,6 +217,7 @@ async def run_worker(opts: WorkerOptions) -> int:
                 clock=opts.clock,
                 run_id=opts.run_id,
                 settings=settings,
+                since_unix=opts.since_unix,
             )
             if not sources:
                 return EXIT_OK

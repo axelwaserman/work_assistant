@@ -230,3 +230,69 @@ async def test_fetch_resumes_from_existing_channel_cursor(initialized_db: Path) 
         c for c in mcp.calls if type(c.request).__name__ == "ConversationsHistoryRequest"
     )
     assert history_call.request.oldest == "500.000"
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_since_unix_when_set(initialized_db: Path) -> None:
+    """When ctx.since_unix is set, new channels seed at that ts instead of backfill window."""
+    mcp = FakeMCPClient(
+        script=slack_script(
+            list_channels=[ConversationsListResponse(channels=[_channel("C_NEW", "fresh")])],
+            histories={"C_NEW": [ConversationsHistoryResponse(messages=[], has_more=False)]},
+        )
+    )
+    ctx = IngestContext(
+        db=SqliteDbFactory(db_path=initialized_db),
+        mcp=mcp,
+        logger=structlog.get_logger("test"),
+        settings=None,  # type: ignore[arg-type]
+        clock=FakeClock(datetime(2026, 6, 5, 12, 0, 0, tzinfo=UTC)),
+        since_unix=1_700_000_000,
+    )
+    src = SlackSource(ctx)
+    [b async for b in src.fetch(SlackCursor())]
+    history_call = next(
+        c for c in mcp.calls if type(c.request).__name__ == "ConversationsHistoryRequest"
+    )
+    assert history_call.request.oldest == "1700000000"
+
+
+@pytest.mark.asyncio
+async def test_fetch_with_since_unix_discards_persisted_cursor(initialized_db: Path) -> None:
+    """When ctx.since_unix is set, _load_or_init_cursor returns empty SlackCursor."""
+    # Pre-populate ingest_cursors with a different cursor.
+    import sqlite3
+
+    with sqlite3.connect(initialized_db) as conn:
+        existing = SlackCursor(
+            channels=[
+                ChannelCursor(channel_id="C_NEW", channel_name="fresh", last_seen_ts="999.000"),
+            ]
+        ).model_dump_json()
+        conn.execute(
+            "INSERT INTO ingest_cursors(source, cursor, updated_at, last_status) "
+            "VALUES (?, ?, ?, ?)",
+            ("slack", existing, 1700000000, "ok"),
+        )
+
+    mcp = FakeMCPClient(
+        script=slack_script(
+            list_channels=[ConversationsListResponse(channels=[_channel("C_NEW", "fresh")])],
+            histories={"C_NEW": [ConversationsHistoryResponse(messages=[], has_more=False)]},
+        )
+    )
+    ctx = IngestContext(
+        db=SqliteDbFactory(db_path=initialized_db),
+        mcp=mcp,
+        logger=structlog.get_logger("test"),
+        settings=None,  # type: ignore[arg-type]
+        clock=FakeClock(datetime(2026, 6, 5, 12, 0, 0, tzinfo=UTC)),
+        since_unix=1_700_000_000,
+    )
+    src = SlackSource(ctx)
+    [b async for b in src.fetch(None)]
+    history_call = next(
+        c for c in mcp.calls if type(c.request).__name__ == "ConversationsHistoryRequest"
+    )
+    # Persisted ts=999.000 ignored; since_unix used instead.
+    assert history_call.request.oldest == "1700000000"

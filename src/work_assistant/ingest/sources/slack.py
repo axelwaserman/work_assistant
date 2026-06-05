@@ -420,7 +420,11 @@ class SlackSource(Source):
                 continue
             ch_cursor = slack_cursor.lookup(channel.id)
             if ch_cursor is None:
-                seed_ts = self.ctx.clock.now_unix() - BACKFILL_DAYS_DEFAULT * 86400
+                seed_ts = (
+                    self.ctx.since_unix
+                    if self.ctx.since_unix is not None
+                    else self.ctx.clock.now_unix() - BACKFILL_DAYS_DEFAULT * 86400
+                )
                 ch_cursor = ChannelCursor(
                     channel_id=channel.id,
                     channel_name=channel.name,
@@ -512,8 +516,11 @@ class SlackSource(Source):
     def _load_or_init_cursor(self, cursor: Cursor | None) -> SlackCursor:
         """Phase 1 scaffold passes None; we read our own row.
 
-        See docs/superpowers/specs/2026-06-05-slack-source-design.md §4.4.
+        When ctx.since_unix is set, discard persisted state — `--since`
+        replaces it for this run. See spec §4.4.
         """
+        if self.ctx.since_unix is not None:
+            return SlackCursor()
         if isinstance(cursor, SlackCursor):
             return cursor
         with self.ctx.db.open() as conn:
