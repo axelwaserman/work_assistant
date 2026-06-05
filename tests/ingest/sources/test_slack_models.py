@@ -5,7 +5,21 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from work_assistant.ingest.sources.slack import ChannelCursor, SlackCursor
+from work_assistant.ingest.sources.slack import (
+    AuthTestRequest,
+    ChannelCursor,
+    ConversationsHistoryRequest,
+    ConversationsHistoryResponse,
+    ConversationsListRequest,
+    ConversationsRepliesRequest,
+    GetPermalinkRequest,
+    SlackChannel,
+    SlackCursor,
+    SlackMessage,
+    SlackUser,
+    UsersInfoRequest,
+    UsersInfoResponse,
+)
 
 
 def test_slack_cursor_default_is_empty() -> None:
@@ -78,3 +92,78 @@ def test_channel_cursor_is_frozen() -> None:
     ch = ChannelCursor(channel_id="C1", channel_name="general", last_seen_ts="1.0")
     with pytest.raises(ValidationError):
         ch.last_seen_ts = "2.0"  # type: ignore[misc]
+
+
+def test_slack_channel_parses() -> None:
+    ch = SlackChannel(
+        id="C1",
+        name="general",
+        is_member=True,
+        is_archived=False,
+        is_im=False,
+        is_mpim=False,
+    )
+    assert ch.id == "C1"
+    assert ch.is_member is True
+
+
+def test_slack_message_parses_with_optional_fields() -> None:
+    msg = SlackMessage(
+        ts="100.000",
+        user="U1",
+        text="hi",
+        thread_ts=None,
+        subtype=None,
+    )
+    assert msg.ts == "100.000"
+    assert msg.thread_ts is None
+
+
+def test_slack_user_parses() -> None:
+    user = SlackUser(id="U1", name="alice", real_name="Alice", email="alice@example.com")
+    assert user.email == "alice@example.com"
+
+
+def test_conversations_list_request_tool_name() -> None:
+    assert ConversationsListRequest.tool_name == "conversations_list"
+
+
+def test_conversations_history_request_serializes_args() -> None:
+    req = ConversationsHistoryRequest(channel="C1", oldest="100.000", limit=200)
+    assert req.tool_name == "conversations_history"
+    args = req.model_dump()
+    assert args == {"channel": "C1", "oldest": "100.000", "limit": 200}
+
+
+def test_conversations_history_response_round_trip() -> None:
+    payload = """{
+        "messages": [{"ts": "100.000", "user": "U1", "text": "hi"}],
+        "has_more": false,
+        "response_metadata": null
+    }"""
+    resp = ConversationsHistoryResponse.model_validate_json(payload)
+    assert len(resp.messages) == 1
+    assert resp.messages[0].ts == "100.000"
+    assert resp.has_more is False
+
+
+def test_conversations_replies_request_tool_name() -> None:
+    assert ConversationsRepliesRequest.tool_name == "conversations_replies"
+
+
+def test_users_info_request_tool_name() -> None:
+    assert UsersInfoRequest.tool_name == "users_info"
+
+
+def test_get_permalink_request_tool_name() -> None:
+    assert GetPermalinkRequest.tool_name == "chat_get_permalink"
+
+
+def test_auth_test_request_tool_name() -> None:
+    assert AuthTestRequest.tool_name == "auth_test"
+
+
+def test_users_info_response_round_trip() -> None:
+    payload = '{"user": {"id": "U1", "name": "alice", "real_name": "Alice", "email": "a@b.com"}}'
+    resp = UsersInfoResponse.model_validate_json(payload)
+    assert resp.user.email == "a@b.com"
