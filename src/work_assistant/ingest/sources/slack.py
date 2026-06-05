@@ -8,13 +8,15 @@ in the Phase 1 scaffold; this module reads its own cursor row via
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from work_assistant.ingest.clock import Clock
 from work_assistant.ingest.context import DbFactory
-from work_assistant.ingest.models import Cursor
+from work_assistant.ingest.models import Cursor, NormalizedEvent, SlackMetadata, SourceName
 from work_assistant.mcp.client import MCPRequest, MCPResponse
 
 USER_CACHE_TTL_SECONDS = 7 * 86400
@@ -231,3 +233,95 @@ class _SlackUserCache:
 
     def is_stale(self, fetched_at: int) -> bool:
         return (self._clock.now_unix() - fetched_at) > USER_CACHE_TTL_SECONDS
+
+
+_MENTION_RE = re.compile(r"<@([A-Z0-9_]+)>")
+BODY_MAX_BYTES = 100_000
+
+
+def _thread_eligible(
+    top: SlackMessage,
+    *,
+    replies: list[SlackMessage] | None,
+    own_user_id: str,
+) -> bool:
+    """Return True iff the user authored or was @-mentioned at any depth."""
+    own_marker = f"<@{own_user_id}>"
+    if top.user == own_user_id:
+        return True
+    if own_marker in top.text:
+        return True
+    if replies is None:
+        return False
+    for reply in replies:
+        if reply.user == own_user_id:
+            return True
+        if own_marker in reply.text:
+            return True
+    return False
+
+
+def _rewrite_mentions(text: str, cache: _SlackUserCache) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        user_id = match.group(1)
+        cached = cache.get(user_id)
+        if cached is None:
+            return match.group(0)  # leave literal
+        return f"@{cached.name}"
+
+    return _MENTION_RE.sub(_replace, text)
+
+
+def _truncate_body(body: str) -> tuple[str, bool]:
+    """Return (body, truncated). UTF-8 byte-bounded; drop incomplete trailing codepoint."""
+    encoded = body.encode("utf-8")
+    if len(encoded) <= BODY_MAX_BYTES:
+        return body, False
+    truncated_bytes = encoded[:BODY_MAX_BYTES]
+    return truncated_bytes.decode("utf-8", errors="ignore"), True
+
+
+def _normalize_message(
+    *,
+    msg: SlackMessage,
+    channel: SlackChannel,
+    cache: _SlackUserCache,
+    own_user_id: str,
+    source_name: SourceName,
+) -> NormalizedEvent:
+    """Build a NormalizedEvent from a Slack message + channel + actor cache."""
+    rewritten = _rewrite_mentions(msg.text, cache)
+    body, truncated = _truncate_body(rewritten)
+    own_marker = f"<@{own_user_id}>"
+    is_mention = own_marker in msg.text
+    thread_key = msg.thread_ts or msg.ts
+    source_id = f"{channel.id}:{msg.ts}"
+    occurred_at = int(float(msg.ts))
+    payload = f"{source_name}:{source_id}:{body}".encode()
+    content_hash = hashlib.sha256(payload).hexdigest()
+
+    metadata = SlackMetadata(
+        channel_id=channel.id,
+        channel_name=channel.name,
+        is_im=channel.is_im,
+        is_mpim=channel.is_mpim,
+        is_dm=channel.is_im,
+        is_mention=is_mention,
+        reactions_json="[]",
+        files_json="[]",
+    )
+
+    return NormalizedEvent(
+        source=source_name,
+        source_id=source_id,
+        source_link=None,
+        content_hash=content_hash,
+        occurred_at=occurred_at,
+        actor=msg.user,
+        thread_key=thread_key,
+        kind="message",
+        title=body[:80] if body else None,
+        body=body,
+        body_truncated=truncated,
+        metadata=metadata,
+    )
