@@ -453,15 +453,21 @@ class SlackSource(Source):
 
             events: list[NormalizedEvent] = []
             for msg in history.messages:
-                events.append(
-                    _normalize_message(
-                        msg=msg,
-                        channel=channel,
-                        cache=cache,
-                        own_user_id=own_user_id,
-                        source_name="slack",
-                    )
+                event = _normalize_message(
+                    msg=msg,
+                    channel=channel,
+                    cache=cache,
+                    own_user_id=own_user_id,
+                    source_name="slack",
                 )
+                permalink = await self._maybe_permalink(
+                    channel=channel,
+                    msg=msg,
+                    own_user_id=own_user_id,
+                )
+                if permalink is not None:
+                    event = event.model_copy(update={"source_link": permalink})
+                events.append(event)
                 if msg.thread_ts and _thread_eligible(
                     msg,
                     replies=None,
@@ -491,15 +497,23 @@ class SlackSource(Source):
                     for reply in replies.messages:
                         if reply.ts == msg.thread_ts:
                             continue
-                        events.append(
-                            _normalize_message(
-                                msg=reply,
-                                channel=channel,
-                                cache=cache,
-                                own_user_id=own_user_id,
-                                source_name="slack",
-                            )
+                        reply_event = _normalize_message(
+                            msg=reply,
+                            channel=channel,
+                            cache=cache,
+                            own_user_id=own_user_id,
+                            source_name="slack",
                         )
+                        reply_permalink = await self._maybe_permalink(
+                            channel=channel,
+                            msg=reply,
+                            own_user_id=own_user_id,
+                        )
+                        if reply_permalink is not None:
+                            reply_event = reply_event.model_copy(
+                                update={"source_link": reply_permalink},
+                            )
+                        events.append(reply_event)
 
             new_last_seen = (
                 max(m.ts for m in history.messages) if history.messages else ch_cursor.last_seen_ts
@@ -537,3 +551,34 @@ class SlackSource(Source):
         except SlackError as exc:
             raise map_slack_error(exc.code) from exc
         return resp.user_id
+
+    async def _maybe_permalink(
+        self,
+        *,
+        channel: SlackChannel,
+        msg: SlackMessage,
+        own_user_id: str,
+    ) -> str | None:
+        """Fetch chat.getPermalink only for mentions or DM-channel messages.
+
+        Per spec §3.6: avoid the API call for high-volume non-mention traffic
+        in shared channels. Failures degrade gracefully — log + return None.
+        """
+        own_marker = f"<@{own_user_id}>"
+        is_mention = own_marker in msg.text
+        if not (is_mention or channel.is_im):
+            return None
+        try:
+            resp = await self.ctx.mcp.call(
+                GetPermalinkRequest(channel=channel.id, message_ts=msg.ts),
+                GetPermalinkResponse,
+            )
+        except SlackError as exc:
+            self.ctx.logger.warning(
+                "slack_permalink_failed",
+                channel=channel.id,
+                ts=msg.ts,
+                code=exc.code,
+            )
+            return None
+        return resp.permalink

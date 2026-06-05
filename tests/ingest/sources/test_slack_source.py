@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import structlog
 
-from tests.ingest.fakes import FakeClock, FakeMCPClient
+from tests.ingest.fakes import FakeClock, FakeMCPClient, ScriptedReply
 from tests.ingest.sources._helpers import slack_script
 from work_assistant.ingest.context import IngestContext, SqliteDbFactory
 from work_assistant.ingest.sources.slack import (
@@ -16,6 +16,7 @@ from work_assistant.ingest.sources.slack import (
     ConversationsHistoryResponse,
     ConversationsListResponse,
     ConversationsRepliesResponse,
+    GetPermalinkResponse,
     SlackChannel,
     SlackCursor,
     SlackMessage,
@@ -296,3 +297,47 @@ async def test_fetch_with_since_unix_discards_persisted_cursor(initialized_db: P
     )
     # Persisted ts=999.000 ignored; since_unix used instead.
     assert history_call.request.oldest == "1700000000"
+
+
+# --- lazy permalink ---
+
+
+@pytest.mark.asyncio
+async def test_fetch_fills_permalink_for_mentions(initialized_db: Path) -> None:
+    msg = _msg("100.000", user="U_OTHER", text="hey <@U_OWN>")
+    mcp = FakeMCPClient(
+        script={
+            **slack_script(
+                list_channels=[ConversationsListResponse(channels=[_channel("C1", "general")])],
+                histories={
+                    "C1": [ConversationsHistoryResponse(messages=[msg], has_more=False)],
+                },
+            ),
+            "GetPermalinkRequest": [
+                ScriptedReply(
+                    response=GetPermalinkResponse(
+                        permalink="https://example.slack.com/archives/C1/p100000",
+                    ),
+                ),
+            ],
+        }
+    )
+    src = SlackSource(_ctx(initialized_db, mcp))
+    batches = [b async for b in src.fetch(SlackCursor())]
+    assert batches[0].events[0].source_link == "https://example.slack.com/archives/C1/p100000"
+
+
+@pytest.mark.asyncio
+async def test_fetch_skips_permalink_for_non_mention(initialized_db: Path) -> None:
+    msg = _msg("100.000", user="U_OTHER", text="non-mention")
+    mcp = FakeMCPClient(
+        script=slack_script(
+            list_channels=[ConversationsListResponse(channels=[_channel("C1", "general")])],
+            histories={"C1": [ConversationsHistoryResponse(messages=[msg], has_more=False)]},
+        )
+    )
+    src = SlackSource(_ctx(initialized_db, mcp))
+    batches = [b async for b in src.fetch(SlackCursor())]
+    assert batches[0].events[0].source_link is None
+    permalink_calls = [c for c in mcp.calls if type(c.request).__name__ == "GetPermalinkRequest"]
+    assert permalink_calls == []
