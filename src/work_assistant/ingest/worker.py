@@ -13,8 +13,8 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
 
+from work_assistant import config as wa_config
 from work_assistant import paths
 from work_assistant.ingest.clock import Clock
 from work_assistant.ingest.context import DbFactory, IngestContext, SqliteDbFactory
@@ -24,7 +24,8 @@ from work_assistant.ingest.logging_bind import bind_source_logger
 from work_assistant.ingest.registry import UnknownSourceError, select_sources
 from work_assistant.ingest.runner import SourceRunResult, run_source_safely
 from work_assistant.ingest.source import Source
-from work_assistant.mcp.client import MCPClient, MCPRequest, MCPResponse
+from work_assistant.mcp.bridge import MCPBridge
+from work_assistant.mcp.client import BridgeMCPClient, MCPClient
 
 EXIT_OK = 0
 EXIT_TRANSIENT = 1
@@ -34,18 +35,22 @@ EXIT_CONFIG_FATAL = 4
 EXIT_PERMANENT = 5
 EXIT_KEYBOARD_INTERRUPT = 130
 
-_RespT = TypeVar("_RespT", bound=MCPResponse)
 
+def _build_mcp_client(mcp_server: str, settings: wa_config.Config) -> MCPClient:
+    """Spawn the MCP server process for `mcp_server` and wrap it.
 
-class _NullMCPClient(MCPClient):
-    """Scaffold placeholder. Any call raises; per-source plans wire real bridges."""
-
-    async def call(
-        self,
-        request: MCPRequest,
-        response_model: type[_RespT],
-    ) -> _RespT:
-        raise RuntimeError("MCP bridge not wired; the scaffold ships without per-source MCP setup")
+    Tests monkeypatch this function to inject a FakeMCPClient.
+    """
+    if mcp_server == "slack":
+        cmd = list(settings.mcp.slack_command)
+    elif mcp_server == "todoist":
+        cmd = list(settings.mcp.todoist_command)
+    elif mcp_server == "workspace":
+        cmd = list(settings.mcp.workspace_command)
+    else:
+        raise ValueError(f"unknown mcp_server: {mcp_server!r}")
+    bridge = MCPBridge(name=mcp_server, command=cmd)
+    return BridgeMCPClient(bridge=bridge)
 
 
 class _DryRunConnection(sqlite3.Connection):
@@ -133,16 +138,22 @@ def _build_sources(
     db_factory: DbFactory,
     clock: Clock,
     run_id: str,
+    settings: wa_config.Config,
 ) -> list[Source]:
-    """Build one `Source` instance per selected entry, each with its own context."""
+    """Build one `Source` instance per selected entry, sharing one `MCPClient`
+    per `mcp_server` group."""
+    clients_by_server: dict[str, MCPClient] = {}
     instances: list[Source] = []
     for name, cls in selected.items():
+        server = cls.mcp_server
+        if server not in clients_by_server:
+            clients_by_server[server] = _build_mcp_client(server, settings)
         logger = bind_source_logger(source=name, run_id=run_id)
         ctx = IngestContext(
             db=db_factory,
-            mcp=_NullMCPClient(),
+            mcp=clients_by_server[server],
             logger=logger,
-            settings=None,  # type: ignore[arg-type]
+            settings=settings,
             clock=clock,
         )
         instances.append(cls(ctx))
@@ -155,6 +166,12 @@ async def run_worker(opts: WorkerOptions) -> int:
         raise ValueError("WorkerOptions.clock is required")
 
     base_logger = bind_source_logger(source="-", run_id=opts.run_id)
+
+    try:
+        settings = wa_config.load()
+    except wa_config.ConfigError as exc:
+        base_logger.error("config_load_failed", detail=str(exc))
+        return compute_exit_code([], lock_held=False, config_fatal=True)
 
     try:
         names = _resolve_enabled(opts)
@@ -197,6 +214,7 @@ async def run_worker(opts: WorkerOptions) -> int:
                 db_factory=db_factory,
                 clock=opts.clock,
                 run_id=opts.run_id,
+                settings=settings,
             )
             if not sources:
                 return EXIT_OK

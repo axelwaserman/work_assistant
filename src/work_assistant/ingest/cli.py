@@ -23,6 +23,7 @@ import click
 
 from work_assistant import config as wa_config
 from work_assistant import logging_setup
+from work_assistant.ingest import sources as _sources  # noqa: F401  (registers SOURCES)
 from work_assistant.ingest.clock import SystemClock
 from work_assistant.ingest.registry import SOURCES
 from work_assistant.ingest.worker import (

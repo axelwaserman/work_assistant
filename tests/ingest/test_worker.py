@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.ingest.fakes import FakeClock, StubSource, make_event
+from tests.ingest.fakes import FakeClock, FakeMCPClient, StubSource, make_event
 from work_assistant.ingest.errors import PermanentIngestError
 from work_assistant.ingest.models import Batch, Cursor
 from work_assistant.ingest.runner import SourceRunResult
@@ -23,6 +23,45 @@ from work_assistant.ingest.worker import (
     compute_exit_code,
     run_worker,
 )
+
+_MINIMAL_CONFIG = """
+[bedrock]
+region = "eu-west-1"
+aws_profile = "wa"
+
+[bedrock.models]
+sonnet = "x"
+opus   = "y"
+haiku  = "z"
+
+[mcp]
+todoist_command   = ["true"]
+slack_command     = ["true"]
+workspace_command = ["true"]
+
+[ingest]
+backfill_days_slack    = 30
+backfill_days_gmail    = 90
+backfill_days_calendar = 60
+"""
+
+
+@pytest.fixture(autouse=True)
+def _config_file(isolated_home: Path) -> None:
+    (isolated_home / ".work_assistant" / "config.toml").write_text(
+        _MINIMAL_CONFIG, encoding="utf-8"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    from work_assistant.ingest import worker as worker_mod
+
+    monkeypatch.setattr(
+        worker_mod,
+        "_build_mcp_client",
+        lambda server, settings: FakeMCPClient(script={}),
+    )
 
 
 def _opts(initialized_db: Path, **overrides) -> WorkerOptions:
