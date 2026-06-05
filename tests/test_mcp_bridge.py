@@ -68,8 +68,11 @@ async def test_stderr_is_captured_to_log(isolated_home: Path, mock_server_path: 
     paths.ensure_dirs()
     async with bridge.MCPBridge(
         name="mock-err",
-        command=[sys.executable, "-c", "import sys; sys.stderr.write('boom\\n'); "
-                                       "import time; time.sleep(0.5)"],
+        command=[
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.write('boom\\n'); import time; time.sleep(0.5)",
+        ],
     ) as br:
         # We don't actually call list_tools (server isn't a real MCP); just
         # verify the stderr log file fills up on shutdown.

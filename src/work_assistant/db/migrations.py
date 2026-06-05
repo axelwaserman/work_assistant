@@ -46,9 +46,7 @@ def apply(directory: Path) -> list[str]:
     applied: list[str] = []
     with connection.connect() as conn:
         _ensure_meta_table(conn)
-        existing = {
-            row["version"] for row in conn.execute("SELECT version FROM schema_migrations")
-        }
+        existing = {row["version"] for row in conn.execute("SELECT version FROM schema_migrations")}
         for path in files:
             version = path.stem
             if version in existing:
