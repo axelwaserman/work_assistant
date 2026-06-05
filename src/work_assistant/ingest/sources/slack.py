@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from work_assistant.ingest.clock import Clock
 from work_assistant.ingest.context import DbFactory
+from work_assistant.ingest.errors import IngestError, PermanentIngestError, TransientIngestError
 from work_assistant.ingest.models import Batch, Cursor, NormalizedEvent, SlackMetadata, SourceName
 from work_assistant.ingest.source import Source
 from work_assistant.mcp.client import MCPRequest, MCPResponse
@@ -329,6 +330,40 @@ def _normalize_message(
     )
 
 
+_PERMANENT_SLACK_ERRORS = frozenset(
+    {
+        "invalid_auth",
+        "account_inactive",
+        "not_authed",
+        "token_revoked",
+    }
+)
+
+_SKIPPABLE_PER_CHANNEL_ERRORS = frozenset(
+    {
+        "channel_not_found",
+        "not_in_channel",
+    }
+)
+
+
+class SlackError(Exception):
+    """Raised by the MCP layer (or test fakes) carrying a Slack-style error code."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def map_slack_error(code: str) -> IngestError:
+    """Map Slack error codes to our ingest exception hierarchy."""
+    if code in _PERMANENT_SLACK_ERRORS:
+        return PermanentIngestError(f"slack auth: {code}")
+    if code == "rate_limited":
+        return TransientIngestError(f"slack rate limited; persist cursor and exit: {code}")
+    return TransientIngestError(f"slack: {code}")
+
+
 BACKFILL_DAYS_DEFAULT = 30
 PER_CHANNEL_LIMIT = 200
 
@@ -373,10 +408,13 @@ class SlackSource(Source):
         cache = _SlackUserCache(db=self.ctx.db, clock=self.ctx.clock)
         own_user_id = await self._resolve_own_user_id()
 
-        list_resp = await self.ctx.mcp.call(
-            ConversationsListRequest(),
-            ConversationsListResponse,
-        )
+        try:
+            list_resp = await self.ctx.mcp.call(
+                ConversationsListRequest(),
+                ConversationsListResponse,
+            )
+        except SlackError as exc:
+            raise map_slack_error(exc.code) from exc
         for channel in list_resp.channels:
             if channel.is_archived or not channel.is_member:
                 continue
@@ -389,14 +427,25 @@ class SlackSource(Source):
                     last_seen_ts=str(seed_ts),
                 )
 
-            history = await self.ctx.mcp.call(
-                ConversationsHistoryRequest(
-                    channel=channel.id,
-                    oldest=ch_cursor.last_seen_ts,
-                    limit=PER_CHANNEL_LIMIT,
-                ),
-                ConversationsHistoryResponse,
-            )
+            try:
+                history = await self.ctx.mcp.call(
+                    ConversationsHistoryRequest(
+                        channel=channel.id,
+                        oldest=ch_cursor.last_seen_ts,
+                        limit=PER_CHANNEL_LIMIT,
+                    ),
+                    ConversationsHistoryResponse,
+                )
+            except SlackError as exc:
+                if exc.code in _SKIPPABLE_PER_CHANNEL_ERRORS:
+                    self.ctx.logger.warning(
+                        "slack_channel_skipped",
+                        channel_id=channel.id,
+                        channel_name=channel.name,
+                        code=exc.code,
+                    )
+                    continue
+                raise map_slack_error(exc.code) from exc
 
             events: list[NormalizedEvent] = []
             for msg in history.messages:
@@ -414,10 +463,21 @@ class SlackSource(Source):
                     replies=None,
                     own_user_id=own_user_id,
                 ):
-                    replies = await self.ctx.mcp.call(
-                        ConversationsRepliesRequest(channel=channel.id, ts=msg.thread_ts),
-                        ConversationsRepliesResponse,
-                    )
+                    try:
+                        replies = await self.ctx.mcp.call(
+                            ConversationsRepliesRequest(channel=channel.id, ts=msg.thread_ts),
+                            ConversationsRepliesResponse,
+                        )
+                    except SlackError as exc:
+                        if exc.code in _SKIPPABLE_PER_CHANNEL_ERRORS:
+                            self.ctx.logger.warning(
+                                "slack_replies_skipped",
+                                channel_id=channel.id,
+                                ts=msg.thread_ts,
+                                code=exc.code,
+                            )
+                            continue  # skip this thread, keep top-level event
+                        raise map_slack_error(exc.code) from exc
                     if not _thread_eligible(
                         msg,
                         replies=replies.messages,
@@ -465,5 +525,8 @@ class SlackSource(Source):
         return SlackCursor.model_validate_json(row["cursor"])
 
     async def _resolve_own_user_id(self) -> str:
-        resp = await self.ctx.mcp.call(AuthTestRequest(), AuthTestResponse)
+        try:
+            resp = await self.ctx.mcp.call(AuthTestRequest(), AuthTestResponse)
+        except SlackError as exc:
+            raise map_slack_error(exc.code) from exc
         return resp.user_id
