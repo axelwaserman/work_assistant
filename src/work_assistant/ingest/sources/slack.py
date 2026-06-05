@@ -61,7 +61,7 @@ class SlackCursor(Cursor):
 
 
 class SlackChannel(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
     name: str
