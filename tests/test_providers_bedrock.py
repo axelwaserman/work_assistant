@@ -10,8 +10,9 @@ from work_assistant.providers import bedrock
 
 
 class _FakeClient:
-    def __init__(self, response: dict[str, Any] | None = None,
-                 raise_exc: Exception | None = None) -> None:
+    def __init__(
+        self, response: dict[str, Any] | None = None, raise_exc: Exception | None = None
+    ) -> None:
         self._response = response
         self._raise = raise_exc
         self.last_kwargs: dict[str, Any] | None = None
@@ -26,8 +27,7 @@ class _FakeClient:
 
 def test_smoke_test_returns_ok_on_successful_call(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeClient(
-        response={"output": {"message": {"content": [{"text": "ok"}]}},
-                  "stopReason": "end_turn"}
+        response={"output": {"message": {"content": [{"text": "ok"}]}}, "stopReason": "end_turn"}
     )
     monkeypatch.setattr(bedrock, "_make_client", lambda region, profile: fake)
 

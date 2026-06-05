@@ -61,9 +61,7 @@ def test_apply_fails_on_bad_sql(isolated_home: Path, tmp_path: Path) -> None:
         migrations.apply(mig_dir)
 
 
-def test_apply_records_only_successful_migrations(
-    isolated_home: Path, tmp_path: Path
-) -> None:
+def test_apply_records_only_successful_migrations(isolated_home: Path, tmp_path: Path) -> None:
     paths.ensure_dirs()
     mig_dir = tmp_path / "migs"
     _make_migration(mig_dir, "0001_ok.sql", "CREATE TABLE good (id INTEGER);")
@@ -76,8 +74,7 @@ def test_apply_records_only_successful_migrations(
             for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")
         ]
         tables = {
-            row["name"]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     assert applied == ["0001_ok"]
     assert "good" in tables
