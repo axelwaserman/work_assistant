@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import AsyncIterator
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from work_assistant.ingest.clock import Clock
 from work_assistant.ingest.context import DbFactory
-from work_assistant.ingest.models import Cursor, NormalizedEvent, SlackMetadata, SourceName
+from work_assistant.ingest.models import Batch, Cursor, NormalizedEvent, SlackMetadata, SourceName
+from work_assistant.ingest.source import Source
 from work_assistant.mcp.client import MCPRequest, MCPResponse
 
 USER_CACHE_TTL_SECONDS = 7 * 86400
@@ -325,3 +327,143 @@ def _normalize_message(
         body_truncated=truncated,
         metadata=metadata,
     )
+
+
+BACKFILL_DAYS_DEFAULT = 30
+PER_CHANNEL_LIMIT = 200
+
+
+class SlackSource(Source):
+    """Cron-driven Slack ingest. See docs/superpowers/specs/2026-06-05-slack-source-design.md."""
+
+    name: ClassVar[str] = "slack"
+    mcp_server: ClassVar[str] = "slack"
+
+    def cursor_from_timestamp(self, ts: int) -> SlackCursor:
+        """Per spec §4.4: returns empty SlackCursor; fetch() seeds each channel.
+
+        We can't enumerate channels here (that requires an async MCP call and
+        this method is sync per the Source ABC). The fetch loop treats
+        cursor.lookup(channel_id) is None as "seed at backfill window OR
+        caller-provided since_unix"; the worker plumbs since_unix through
+        IngestContext (Task 10).
+        """
+        return SlackCursor()
+
+    def normalize_body(self, raw: str) -> tuple[str, bool]:
+        return _truncate_body(raw)
+
+    async def resolve_actor(self, raw_actor: str) -> str | None:
+        cache = _SlackUserCache(db=self.ctx.db, clock=self.ctx.clock)
+        cached = cache.get(raw_actor)
+        if cached is not None:
+            return cached.email or cached.name
+        try:
+            resp = await self.ctx.mcp.call(
+                UsersInfoRequest(user=raw_actor),
+                UsersInfoResponse,
+            )
+        except Exception:
+            return None
+        cache.upsert(resp.user, fetched_at=self.ctx.clock.now_unix())
+        return resp.user.email or resp.user.name
+
+    async def fetch(self, cursor: Cursor | None) -> AsyncIterator[Batch]:
+        slack_cursor = self._load_or_init_cursor(cursor)
+        cache = _SlackUserCache(db=self.ctx.db, clock=self.ctx.clock)
+        own_user_id = await self._resolve_own_user_id()
+
+        list_resp = await self.ctx.mcp.call(
+            ConversationsListRequest(),
+            ConversationsListResponse,
+        )
+        for channel in list_resp.channels:
+            if channel.is_archived or not channel.is_member:
+                continue
+            ch_cursor = slack_cursor.lookup(channel.id)
+            if ch_cursor is None:
+                seed_ts = self.ctx.clock.now_unix() - BACKFILL_DAYS_DEFAULT * 86400
+                ch_cursor = ChannelCursor(
+                    channel_id=channel.id,
+                    channel_name=channel.name,
+                    last_seen_ts=str(seed_ts),
+                )
+
+            history = await self.ctx.mcp.call(
+                ConversationsHistoryRequest(
+                    channel=channel.id,
+                    oldest=ch_cursor.last_seen_ts,
+                    limit=PER_CHANNEL_LIMIT,
+                ),
+                ConversationsHistoryResponse,
+            )
+
+            events: list[NormalizedEvent] = []
+            for msg in history.messages:
+                events.append(
+                    _normalize_message(
+                        msg=msg,
+                        channel=channel,
+                        cache=cache,
+                        own_user_id=own_user_id,
+                        source_name="slack",
+                    )
+                )
+                if msg.thread_ts and _thread_eligible(
+                    msg,
+                    replies=None,
+                    own_user_id=own_user_id,
+                ):
+                    replies = await self.ctx.mcp.call(
+                        ConversationsRepliesRequest(channel=channel.id, ts=msg.thread_ts),
+                        ConversationsRepliesResponse,
+                    )
+                    if not _thread_eligible(
+                        msg,
+                        replies=replies.messages,
+                        own_user_id=own_user_id,
+                    ):
+                        continue
+                    for reply in replies.messages:
+                        if reply.ts == msg.thread_ts:
+                            continue
+                        events.append(
+                            _normalize_message(
+                                msg=reply,
+                                channel=channel,
+                                cache=cache,
+                                own_user_id=own_user_id,
+                                source_name="slack",
+                            )
+                        )
+
+            new_last_seen = (
+                max(m.ts for m in history.messages) if history.messages else ch_cursor.last_seen_ts
+            )
+            updated_ch = ChannelCursor(
+                channel_id=channel.id,
+                channel_name=channel.name,
+                last_seen_ts=new_last_seen,
+            )
+            slack_cursor = slack_cursor.with_updated(updated_ch)
+
+            yield Batch(events=events, next_cursor=slack_cursor, status="ok")
+
+    def _load_or_init_cursor(self, cursor: Cursor | None) -> SlackCursor:
+        """Phase 1 scaffold passes None; we read our own row.
+
+        See docs/superpowers/specs/2026-06-05-slack-source-design.md §4.4.
+        """
+        if isinstance(cursor, SlackCursor):
+            return cursor
+        with self.ctx.db.open() as conn:
+            row = conn.execute(
+                "SELECT cursor FROM ingest_cursors WHERE source = 'slack'"
+            ).fetchone()
+        if row is None or not row["cursor"]:
+            return SlackCursor()
+        return SlackCursor.model_validate_json(row["cursor"])
+
+    async def _resolve_own_user_id(self) -> str:
+        resp = await self.ctx.mcp.call(AuthTestRequest(), AuthTestResponse)
+        return resp.user_id

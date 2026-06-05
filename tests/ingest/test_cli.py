@@ -59,7 +59,11 @@ def _reset_logging_state() -> None:
         handler.close()
 
 
-def test_ingest_cli_no_sources_returns_zero(initialized_db: Path) -> None:
+def test_ingest_cli_no_sources_returns_zero(
+    initialized_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clear registry so no source is selected by the default (config-empty) path.
+    monkeypatch.setattr(ingest_cli, "SOURCES", {})
     runner = CliRunner()
     result = runner.invoke(ingest_cli.ingest, [])
     assert result.exit_code == 0, result.output

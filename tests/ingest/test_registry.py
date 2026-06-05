@@ -33,8 +33,12 @@ class _StubSlack(Source):
         return Cursor()
 
 
-def test_default_registry_is_empty() -> None:
-    assert SOURCES == {}
+def test_default_registry_contains_slack() -> None:
+    """Importing work_assistant.ingest.sources registers SlackSource via side-effect."""
+    import work_assistant.ingest.sources  # noqa: F401  -- side-effect import
+
+    assert "slack" in SOURCES
+    assert SOURCES["slack"].name == "slack"
 
 
 def test_select_sources_filters_to_requested(monkeypatch: pytest.MonkeyPatch) -> None:
