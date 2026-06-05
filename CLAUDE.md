@@ -4,7 +4,7 @@ Project-specific instructions for Claude Code in this repo.
 
 ## Stack
 
-- Python 3.12+ (`requires-python = ">=3.12"` in `pyproject.toml`).
+- Python 3.13+ (`requires-python = ">=3.13"` in `pyproject.toml`).
 - `uv` for env + deps. Tests via `uv run pytest`.
 - Single-user, local-first agentic productivity system. See `docs/00-overview.md` for full context.
 
