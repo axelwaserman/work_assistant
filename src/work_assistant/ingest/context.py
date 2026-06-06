@@ -57,3 +57,4 @@ class IngestContext:
     logger: structlog.stdlib.BoundLogger
     settings: Config
     clock: Clock
+    since_unix: int | None = None
